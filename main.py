@@ -4,6 +4,7 @@ import gc
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from collections import defaultdict
+from PIL import Image, ImageTk
 
 class DupeSweep:
     BATCH_SIZE = 500
@@ -11,7 +12,7 @@ class DupeSweep:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("DupliClean")
-        self.root.geometry("900x700")
+        self.root.geometry("950x750")
         
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -28,7 +29,7 @@ class DupeSweep:
         progress_frame.pack(fill=tk.X, pady=5)
         
         self.progress_var = tk.DoubleVar()
-        self.progress = ttk.Progressbar(progress_frame, length=800, variable=self.progress_var)
+        self.progress = ttk.Progressbar(progress_frame, length=850, variable=self.progress_var)
         self.progress.pack(fill=tk.X)
         
         self.status = tk.StringVar()
@@ -62,8 +63,15 @@ class DupeSweep:
         details_frame.pack(fill=tk.X, pady=5)
         
         self.details_var = tk.StringVar()
-        details_label = ttk.Label(details_frame, textvariable=self.details_var, wraplength=850)
+        details_label = ttk.Label(details_frame, textvariable=self.details_var, wraplength=900)
         details_label.pack(fill=tk.X, padx=5, pady=2)
+        
+        preview_frame = ttk.Frame(details_frame)
+        preview_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.preview_canvas = tk.Canvas(preview_frame, height=80, bg='#f0f0f0')
+        self.preview_canvas.pack(fill=tk.X)
+        self.previews = []
         
         list_frame = ttk.Frame(details_frame)
         list_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -75,20 +83,28 @@ class DupeSweep:
         
         selection_frame = ttk.Frame(details_frame)
         selection_frame.pack(fill=tk.X, pady=5)
-                
+        
+        ttk.Button(selection_frame, text="Select All", command=self.select_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(selection_frame, text="Clear Selection", command=self.clear_selection).pack(side=tk.LEFT, padx=5)
+        
         action_frame = ttk.Frame(main_frame)
         action_frame.pack(fill=tk.X, pady=5)
         
         self.delete_btn = ttk.Button(action_frame, text="Delete Selected Files", command=self.delete_selected, state=tk.DISABLED)
         self.delete_btn.pack(side=tk.LEFT, padx=5)
         
+        self.delete_all_btn = ttk.Button(action_frame, text="Delete All Duplicates", command=self.delete_all_duplicates, state=tk.DISABLED)
+        self.delete_all_btn.pack(side=tk.LEFT, padx=5)
+        
         self.duplicates = defaultdict(list)
         self.hash_groups = defaultdict(list)
         self.file_map = {}
         self.current_group = None
         self.scan_canceled = False
+        self.preview_labels = []
         
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
+        self.file_listbox.bind("<<ListboxSelect>>", self.on_file_select)
     
     def get_hash(self, filepath):
         hasher = hashlib.sha256()
@@ -120,6 +136,8 @@ class DupeSweep:
         self.file_listbox.delete(0, tk.END)
         self.details_var.set("")
         self.delete_btn.config(state=tk.DISABLED)
+        self.delete_all_btn.config(state=tk.DISABLED)
+        self.preview_canvas.delete("all")
         
         self.status.set("Counting files...")
         self.progress_var.set(0)
@@ -169,6 +187,7 @@ class DupeSweep:
         total_to_hash = sum(len(paths) for paths in self.duplicates.values())
         hash_files_processed = 0
         batch_count = 0
+        hash_group_count = 0
         
         for size, paths in self.duplicates.items():
             if self.scan_canceled:
@@ -197,13 +216,24 @@ class DupeSweep:
             for h, dupes in hash_map.items():
                 if len(dupes) > 1:
                     self.hash_groups[(size, h)] = dupes
+                    hash_group_count += 1
         
         for (size, h), paths in self.hash_groups.items():
-            item_id = self.tree.insert("", tk.END, values=(f"{size:,}", len(paths), h[:16] + "..."))
+            item_id = self.tree.insert("", tk.END, text="", values=(f"{size:,}", len(paths), h[:16] + "..."))
             self.file_map[item_id] = (size, h, paths)
+            
+            if paths[0].lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')):
+                try:
+                    img = Image.open(paths[0])
+                    img.thumbnail((32, 32), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    self.previews.append(photo)
+                    self.tree.item(item_id, image=photo)
+                except Exception:
+                    pass
         
         self.progress_var.set(100)
-        self.status.set(f"Scan complete! Found {len(self.hash_groups)} duplicate groups")
+        self.status.set(f"Scan complete! Found {hash_group_count} duplicate groups")
         self.cancel_btn.config(state=tk.DISABLED)
     
     def on_tree_select(self, event):
@@ -211,6 +241,13 @@ class DupeSweep:
         self.details_var.set("")
         self.current_group = None
         self.delete_btn.config(state=tk.DISABLED)
+        self.delete_all_btn.config(state=tk.DISABLED)
+        self.preview_canvas.delete("all")
+        
+        for label in self.preview_labels:
+            label.destroy()
+        self.preview_labels = []
+        self.previews = []
         
         selected_items = self.tree.selection()
         if not selected_items:
@@ -225,10 +262,63 @@ class DupeSweep:
         self.current_group = group_data
         self.details_var.set(f"Duplicate Group: {len(paths)} files, Size: {size:,} bytes, Hash: {h[:16]}...")
         
+        preview_frame = ttk.Frame(self.preview_canvas)
+        self.preview_canvas.create_window((0, 0), window=preview_frame, anchor=tk.NW)
+        
+        for idx, path in enumerate(paths[:10]):
+            try:
+                frame = ttk.Frame(preview_frame)
+                frame.grid(row=0, column=idx, padx=5, pady=5)
+                
+                filename = os.path.basename(path)
+                if len(filename) > 15:
+                    filename = filename[:12] + "..."
+                
+                if path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')):
+                    img = Image.open(path)
+                    img.thumbnail((64, 64), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    self.previews.append(photo)
+                    label = ttk.Label(frame, image=photo, compound=tk.TOP, text=filename)
+                    label.image = photo
+                else:
+                    label = ttk.Label(frame, text=filename, compound=tk.TOP)
+                
+                label.pack()
+                self.preview_labels.append(label)
+            except Exception:
+                try:
+                    frame = ttk.Frame(preview_frame)
+                    frame.grid(row=0, column=idx, padx=5, pady=5)
+                    filename = os.path.basename(path)
+                    if len(filename) > 15:
+                        filename = filename[:12] + "..."
+                    label = ttk.Label(frame, text=filename)
+                    label.pack()
+                    self.preview_labels.append(label)
+                except Exception:
+                    pass
+        
+        preview_frame.update_idletasks()
+        self.preview_canvas.config(scrollregion=self.preview_canvas.bbox("all"))
+        
         for path in paths:
             self.file_listbox.insert(tk.END, path)
         
         self.delete_btn.config(state=tk.NORMAL)
+        self.delete_all_btn.config(state=tk.NORMAL)
+    
+    def on_file_select(self, event):
+        selected = self.file_listbox.curselection()
+        if selected:
+            path = self.file_listbox.get(selected[0])
+            self.details_var.set(f"Selected: {path}")
+    
+    def select_all(self):
+        self.file_listbox.select_set(0, tk.END)
+    
+    def clear_selection(self):
+        self.file_listbox.select_clear(0, tk.END)
     
     def delete_selected(self):
         if not self.current_group:
@@ -245,6 +335,30 @@ class DupeSweep:
         deleted_count = 0
         for idx in selected:
             path = self.file_listbox.get(idx)
+            try:
+                os.remove(path)
+                deleted_count += 1
+            except Exception as e:
+                print(f"Error deleting {path}: {e}")
+        
+        messagebox.showinfo("Deletion Complete", f"Deleted {deleted_count} files")
+        self.scan()
+    
+    def delete_all_duplicates(self):
+        if not self.current_group:
+            return
+            
+        size, h, paths = self.current_group
+        if len(paths) < 2:
+            return
+            
+        if not messagebox.askyesno("Confirm Deletion", 
+                                  f"Delete all duplicates in this group?\n\n"
+                                  f"This will delete {len(paths)-1} files, keeping the first one."):
+            return
+            
+        deleted_count = 0
+        for path in paths[1:]:
             try:
                 os.remove(path)
                 deleted_count += 1
