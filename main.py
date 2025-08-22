@@ -12,33 +12,57 @@ class DupeSweep:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("DupliClean")
-        self.root.geometry("950x750")
+        self.root.geometry("1000x800")
+        self.root.minsize(900, 700)
+        
+        self.style = ttk.Style()
+        self.style.configure("TButton", padding=6)
+        self.style.configure("Title.TLabel", font=('Helvetica', 10, 'bold'))
         
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        scan_frame = ttk.Frame(main_frame)
-        scan_frame.pack(fill=tk.X, pady=5)
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        title_label = ttk.Label(header_frame, text="DupliClean - Duplicate File Finder", 
+                               style="Title.TLabel")
+        title_label.pack(side=tk.LEFT)
+        
+        scan_frame = ttk.Frame(header_frame)
+        scan_frame.pack(side=tk.RIGHT)
+        
         scan_btn = ttk.Button(scan_frame, text="Scan Folder", command=self.scan)
         scan_btn.pack(side=tk.LEFT, padx=5)
         
         self.cancel_btn = ttk.Button(scan_frame, text="Cancel Scan", command=self.cancel_scan, state=tk.DISABLED)
         self.cancel_btn.pack(side=tk.LEFT, padx=5)
         
-        progress_frame = ttk.Frame(main_frame)
+        progress_frame = ttk.LabelFrame(main_frame, text="Progress")
         progress_frame.pack(fill=tk.X, pady=5)
         
         self.progress_var = tk.DoubleVar()
-        self.progress = ttk.Progressbar(progress_frame, length=850, variable=self.progress_var)
-        self.progress.pack(fill=tk.X)
+        self.progress = ttk.Progressbar(progress_frame, length=850, variable=self.progress_var, mode='determinate')
+        self.progress.pack(fill=tk.X, padx=5, pady=5)
         
         self.status = tk.StringVar()
         self.status.set("Ready to scan")
         status_lbl = ttk.Label(progress_frame, textvariable=self.status)
-        status_lbl.pack(pady=5)
+        status_lbl.pack(pady=(0, 5))
         
-        tree_frame = ttk.Frame(main_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        stats_frame = ttk.Frame(progress_frame)
+        stats_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        
+        self.stats_var = tk.StringVar()
+        self.stats_var.set("Total duplicates: 0 | Space wasted: 0 bytes")
+        stats_label = ttk.Label(stats_frame, textvariable=self.stats_var)
+        stats_label.pack(side=tk.LEFT)
+        
+        results_frame = ttk.LabelFrame(main_frame, text="Duplicate Groups")
+        results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        tree_frame = ttk.Frame(results_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         self.tree = ttk.Treeview(tree_frame, columns=("Size", "Count", "Hash"), show="headings", selectmode="browse")
         self.tree.heading("Size", text="Size (bytes)")
@@ -63,15 +87,21 @@ class DupeSweep:
         details_frame.pack(fill=tk.X, pady=5)
         
         self.details_var = tk.StringVar()
-        details_label = ttk.Label(details_frame, textvariable=self.details_var, wraplength=900)
+        details_label = ttk.Label(details_frame, textvariable=self.details_var, wraplength=950)
         details_label.pack(fill=tk.X, padx=5, pady=2)
         
         preview_frame = ttk.Frame(details_frame)
         preview_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        self.preview_canvas = tk.Canvas(preview_frame, height=80, bg='#f0f0f0')
-        self.preview_canvas.pack(fill=tk.X)
-        self.previews = []
+        preview_container = ttk.Frame(preview_frame)
+        preview_container.pack(fill=tk.X)
+        
+        self.preview_canvas = tk.Canvas(preview_container, height=90, bg='#f0f0f0')
+        self.preview_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        preview_scroll = ttk.Scrollbar(preview_container, orient=tk.HORIZONTAL, command=self.preview_canvas.xview)
+        preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.preview_canvas.configure(xscrollcommand=preview_scroll.set)
         
         list_frame = ttk.Frame(details_frame)
         list_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -86,6 +116,7 @@ class DupeSweep:
         
         ttk.Button(selection_frame, text="Select All", command=self.select_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(selection_frame, text="Clear Selection", command=self.clear_selection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(selection_frame, text="Invert Selection", command=self.invert_selection).pack(side=tk.LEFT, padx=5)
         
         action_frame = ttk.Frame(main_frame)
         action_frame.pack(fill=tk.X, pady=5)
@@ -93,8 +124,12 @@ class DupeSweep:
         self.delete_btn = ttk.Button(action_frame, text="Delete Selected Files", command=self.delete_selected, state=tk.DISABLED)
         self.delete_btn.pack(side=tk.LEFT, padx=5)
         
-        self.delete_all_btn = ttk.Button(action_frame, text="Delete All Duplicates", command=self.delete_all_duplicates, state=tk.DISABLED)
+        self.delete_all_btn = ttk.Button(action_frame, text="Delete All Duplicates (Keep One)", 
+                                       command=self.delete_all_duplicates, state=tk.DISABLED)
         self.delete_all_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.export_btn = ttk.Button(action_frame, text="Export File List", command=self.export_file_list, state=tk.DISABLED)
+        self.export_btn.pack(side=tk.LEFT, padx=5)
         
         self.duplicates = defaultdict(list)
         self.hash_groups = defaultdict(list)
@@ -102,15 +137,95 @@ class DupeSweep:
         self.current_group = None
         self.scan_canceled = False
         self.preview_labels = []
+        self.previews = []
+        self.total_duplicate_files = 0
+        self.total_wasted_space = 0
         
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.file_listbox.bind("<<ListboxSelect>>", self.on_file_select)
+        
+        self.setup_context_menu()
+    
+    def setup_context_menu(self):
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Open File Location", command=self.open_file_location)
+        self.context_menu.add_command(label="Copy File Path", command=self.copy_file_path)
+        
+        self.file_listbox.bind("<Button-3>", self.show_context_menu)
+    
+    def show_context_menu(self, event):
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+    
+    def open_file_location(self):
+        selected = self.file_listbox.curselection()
+        if selected:
+            path = self.file_listbox.get(selected[0])
+            folder = os.path.dirname(path)
+            if os.name == 'nt':
+                os.startfile(folder)
+            elif os.name == 'posix':
+                os.system(f'open "{folder}"' if sys.platform == 'darwin' else f'xdg-open "{folder}"')
+    
+    def copy_file_path(self):
+        selected = self.file_listbox.curselection()
+        if selected:
+            path = self.file_listbox.get(selected[0])
+            self.root.clipboard_clear()
+            self.root.clipboard_append(path)
+    
+    def export_file_list(self):
+        if not self.hash_groups:
+            messagebox.showinfo("No Data", "No duplicate files to export.")
+            return
+            
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        
+        if not filename:
+            return
+            
+        try:
+            with open(filename, 'w') as f:
+                f.write("DupliClean - Duplicate File Report\n")
+                f.write("=" * 50 + "\n\n")
+                
+                for (size, h), paths in self.hash_groups.items():
+                    f.write(f"Group: {size} bytes, {len(paths)} duplicates\n")
+                    f.write(f"Hash: {h}\n")
+                    f.write("Files:\n")
+                    
+                    for path in paths:
+                        f.write(f"  {path}\n")
+                    
+                    f.write("\n")
+                
+                f.write(f"Total duplicate groups: {len(self.hash_groups)}\n")
+                f.write(f"Total duplicate files: {self.total_duplicate_files}\n")
+                f.write(f"Total wasted space: {self.format_file_size(self.total_wasted_space)}\n")
+            
+            messagebox.showinfo("Export Complete", f"File list exported to {filename}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export file list: {str(e)}")
+    
+    def format_file_size(self, size_bytes):
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} PB"
     
     def get_hash(self, filepath):
         hasher = hashlib.sha256()
         try:
             with open(filepath, "rb") as f:
                 while chunk := f.read(8192):
+                    if self.scan_canceled:
+                        return None
                     hasher.update(chunk)
             return hasher.hexdigest()
         except Exception:
@@ -119,6 +234,7 @@ class DupeSweep:
     def cancel_scan(self):
         self.scan_canceled = True
         self.cancel_btn.config(state=tk.DISABLED)
+        self.status.set("Canceling scan...")
     
     def scan(self):
         folder = filedialog.askdirectory()
@@ -130,6 +246,7 @@ class DupeSweep:
         
         for item in self.tree.get_children():
             self.tree.delete(item)
+
         self.duplicates.clear()
         self.hash_groups.clear()
         self.file_map.clear()
@@ -137,14 +254,25 @@ class DupeSweep:
         self.details_var.set("")
         self.delete_btn.config(state=tk.DISABLED)
         self.delete_all_btn.config(state=tk.DISABLED)
+        self.export_btn.config(state=tk.DISABLED)
         self.preview_canvas.delete("all")
+        
+        for label in self.preview_labels:
+            label.destroy()
+        self.preview_labels = []
+        self.previews = []
         
         self.status.set("Counting files...")
         self.progress_var.set(0)
+        self.stats_var.set("Total duplicates: 0 | Space wasted: 0 bytes")
         self.root.update()
         
         total_files = 0
         for root, _, files in os.walk(folder):
+            if self.scan_canceled:
+                self.status.set("Scan canceled")
+                self.cancel_btn.config(state=tk.DISABLED)
+                return
             total_files += len(files)
         
         size_map = defaultdict(list)
@@ -218,6 +346,9 @@ class DupeSweep:
                     self.hash_groups[(size, h)] = dupes
                     hash_group_count += 1
         
+        self.total_duplicate_files = sum(len(paths) - 1 for paths in self.hash_groups.values())
+        self.total_wasted_space = sum(size * (len(paths) - 1) for (size, h), paths in self.hash_groups.items())
+        
         for (size, h), paths in self.hash_groups.items():
             item_id = self.tree.insert("", tk.END, text="", values=(f"{size:,}", len(paths), h[:16] + "..."))
             self.file_map[item_id] = (size, h, paths)
@@ -234,7 +365,9 @@ class DupeSweep:
         
         self.progress_var.set(100)
         self.status.set(f"Scan complete! Found {hash_group_count} duplicate groups")
+        self.stats_var.set(f"Total duplicates: {self.total_duplicate_files} | Space wasted: {self.format_file_size(self.total_wasted_space)}")
         self.cancel_btn.config(state=tk.DISABLED)
+        self.export_btn.config(state=tk.NORMAL)
     
     def on_tree_select(self, event):
         self.file_listbox.delete(0, tk.END)
@@ -265,7 +398,7 @@ class DupeSweep:
         preview_frame = ttk.Frame(self.preview_canvas)
         self.preview_canvas.create_window((0, 0), window=preview_frame, anchor=tk.NW)
         
-        for idx, path in enumerate(paths[:10]):
+        for idx, path in enumerate(paths[:15]):
             try:
                 frame = ttk.Frame(preview_frame)
                 frame.grid(row=0, column=idx, padx=5, pady=5)
@@ -319,6 +452,15 @@ class DupeSweep:
     
     def clear_selection(self):
         self.file_listbox.select_clear(0, tk.END)
+    
+    def invert_selection(self):
+        all_indices = set(range(self.file_listbox.size()))
+        selected_indices = set(self.file_listbox.curselection())
+        new_selection = all_indices - selected_indices
+        
+        self.file_listbox.select_clear(0, tk.END)
+        for index in new_selection:
+            self.file_listbox.select_set(index)
     
     def delete_selected(self):
         if not self.current_group:
